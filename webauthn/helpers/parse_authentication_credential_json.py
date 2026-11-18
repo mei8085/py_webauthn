@@ -65,7 +65,12 @@ def parse_authentication_credential_json(
         # The `userHandle` string will most likely be base64url-encoded for ease of JSON
         # transmission as per the L3 Draft spec:
         # https://w3c.github.io/webauthn/#dictdef-authenticatorassertionresponsejson
-        response_user_handle = base64url_to_bytes(response_user_handle)
+        try:
+            response_user_handle = base64url_to_bytes(response_user_handle)
+        except Exception as user_handle_exc:
+            raise InvalidJSONStructure(
+                "Credential response had malformed userHandle"
+            ) from user_handle_exc
     elif response_user_handle is not None:
         # If it's not a string, and it's not None, then it's definitely not valid
         raise InvalidJSONStructure("Credential response had unexpected userHandle")

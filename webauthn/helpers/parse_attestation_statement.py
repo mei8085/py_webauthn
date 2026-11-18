@@ -1,5 +1,6 @@
 from typing import Any, Dict
 
+from .exceptions import InvalidAttestationObjectStructure
 from .structs import AttestationStatement
 
 
@@ -7,6 +8,9 @@ def parse_attestation_statement(val: Dict[str, Any]) -> AttestationStatement:
     """
     Turn `response.attestationObject.attStmt` into structured data
     """
+    if not isinstance(val, dict):
+        raise InvalidAttestationObjectStructure("attStmt was not a dict")
+
     attestation_statement = AttestationStatement()
 
     # Populate optional fields that may exist in the attestation statement

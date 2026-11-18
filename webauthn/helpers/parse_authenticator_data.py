@@ -11,6 +11,11 @@ def parse_authenticator_data(val: bytes) -> AuthenticatorData:
     """
     Turn `response.attestationObject.authData` into structured data
     """
+    if not isinstance(val, (bytes, bytearray, memoryview)):
+        raise InvalidAuthenticatorDataStructure(
+            f"Authenticator data was {type(val).__name__}, expected bytes"
+        )
+
     val = byteslike_to_bytes(val)
 
     # Don't bother parsing if there aren't enough bytes for at least:
