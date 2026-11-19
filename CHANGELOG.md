@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+**Security:**
+
+- Certificate chain validation for `"packed"`, `"tpm"`, and `"fido-u2f"` attestation now enforces a stricter security boundary. An attestation certificate must simultaneously satisfy:
+  - **Key usage constraints**: when a Key Usage extension is present it must permit `digitalSignature`; TPM AIK certificates must additionally carry the TCG `tcg-kp-AIKCertificate` (OID `2.23.133.8.3`) Extended Key Usage.
+  - **Basic constraints**: packed and TPM leaf certificates must carry a Basic Constraints extension whose CA component is `false`.
+  - **Issuer chain order**: certificates in `x5c` must be ordered leaf-first with each issuer immediately following its subject; OpenSSL's silent chain reordering no longer masks an abnormal order.
+  - **Attestation-type extension constraints**: TPM AIK certificates must carry the Subject Alternative Name TPM manufacturer, model and firmware version entries.
+  - **AAGUID binding**: when the optional `id-fido-gen-ce-aaguid` (OID `1.3.6.1.4.1.45724.1.1.4`) extension is present in a packed or TPM certificate it must be non-critical, encode a 16-byte AAGUID, and match the AAGUID in the authenticator data. A disagreement is now rejected.
+- EC certificates on curves other than the WebAuthn-permitted P-256, P-384 and P-521 are rejected.
+- Expired or not-yet-valid certificates in the chain are rejected at validation time, including expiry reported by OpenSSL itself.
+- Each failure mode now raises a distinct, stable subclass of `InvalidCertificateChain`: `CertificateChainExpired`, `InvalidCertificateOrder`, `InvalidCertificateCurve`, `InvalidCertificateExtension`, `CertificateAAGUIDMismatch`, and `InvalidCertificateKeyUsage`.
+- Certificate parsing no longer treats unknown or merely-present extension fields as verified security attributes: every security property is located by an explicit OID and fully validated. Certificates that violate ASN.1 DER (e.g. an explicitly encoded DEFAULT `critical`) are still accepted via a lenient BER fallback, while signature verification continues to operate on the untouched original bytes.
+- An unrecognized TPM ECC curve ID in `pubArea` now raises `InvalidTPMPubAreaStructure` instead of a raw `KeyError`.
+
+**Changes:**
+
+- `validate_certificate_chain()` accepts new optional `attestation_type`, `aaguid`, and `validation_time` keyword arguments. Existing calls without them keep their previous behavior for trust-anchor verification while gaining the structural order, validity-window and curve checks.
+- `verify_packed()` and `verify_tpm()` now require an `aaguid` argument supplied from the attested credential data.
+
 ## v3.0.1
 
 **Changes:**

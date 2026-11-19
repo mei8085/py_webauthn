@@ -167,7 +167,12 @@ class TPMPubAreaParametersECC:
     def __init__(self, params: bytes):
         self.symmetric = TPM_ALG_MAP[params[0:2]]
         self.scheme = TPM_ALG_MAP[params[2:4]]
-        self.curve_id = TPM_ECC_CURVE_MAP[params[4:6]]
+        try:
+            self.curve_id = TPM_ECC_CURVE_MAP[params[4:6]]
+        except KeyError:
+            raise InvalidTPMPubAreaStructure(
+                f'Pub Area ECC curve ID "{params[4:6].hex()}" was not a recognized TPM curve'
+            )
         self.kdf = TPM_ALG_MAP[params[6:8]]
 
 

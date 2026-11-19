@@ -1,4 +1,6 @@
+from datetime import datetime
 from unittest import TestCase
+from unittest.mock import patch
 
 from webauthn.helpers import base64url_to_bytes
 from webauthn.helpers.structs import AttestationFormat
@@ -6,6 +8,18 @@ from webauthn import verify_registration_response
 
 
 class TestVerifyRegistrationResponseTPM(TestCase):
+    def setUp(self) -> None:
+        # The captured TPM attestation certificates have real, now-expired validity windows
+        # (the earliest expires in 2025). Freeze validation time while these tests run so the
+        # explicit validity-window checks evaluate against a moment when every fixture was
+        # still valid.
+        self._time_patch = patch(
+            "webauthn.helpers.validate_certificate_chain._validation_time_override",
+            datetime(2023, 6, 1, 0, 0, 0),
+        )
+        self._time_patch.start()
+        self.addCleanup(self._time_patch.stop)
+
     def test_verify_attestation_surface_pro_4(self) -> None:
         """
         TPM Mfgr: INTC (Intel)

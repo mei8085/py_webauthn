@@ -1,17 +1,6 @@
 from typing import List
 
-from cryptography import x509
 from cryptography.exceptions import InvalidSignature
-from cryptography.x509 import (
-    ExtendedKeyUsage,
-    GeneralName,
-    Name,
-    SubjectAlternativeName,
-    Version,
-    BasicConstraints,
-)
-from cryptography.x509.extensions import ExtensionNotFound
-from cryptography.x509.oid import ExtensionOID
 
 from webauthn.helpers import (
     decode_credential_public_key,
@@ -20,22 +9,36 @@ from webauthn.helpers import (
     validate_certificate_chain,
     verify_signature,
 )
+from webauthn.helpers.attestation_cert_constraints import (
+    AttestationCertificateType,
+    TCG_AT_TPM_MANUFACTURER_OID,
+)
+from webauthn.helpers.certificate_parsing import load_x509_certificate
 from webauthn.helpers.decode_credential_public_key import (
     DecodedEC2PublicKey,
     DecodedRSAPublicKey,
 )
 from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
+    InvalidCertificateCurve,
     InvalidRegistrationResponse,
 )
 from webauthn.helpers.structs import AttestationStatement
-from webauthn.helpers.tpm import map_tpm_manufacturer_id, parse_cert_info, parse_pub_area
+from webauthn.helpers.tpm import (
+    map_tpm_manufacturer_id,
+    parse_cert_info,
+    parse_pub_area,
+)
 from webauthn.helpers.tpm.structs import (
     TPM_ALG_COSE_ALG_MAP,
     TPM_ECC_CURVE_COSE_CRV_MAP,
     TPMPubAreaParametersECC,
     TPMPubAreaParametersRSA,
 )
+from cryptography.x509 import Version
+from cryptography.x509 import SubjectAlternativeName, GeneralName
+from cryptography.x509.extensions import ExtensionNotFound
+from cryptography.x509.oid import ExtensionOID
 
 
 def verify_tpm(
@@ -45,16 +48,21 @@ def verify_tpm(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
+    aaguid: bytes,
 ) -> bool:
     """Verify a "tpm" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-tpm-attestation
     """
     if not attestation_statement.cert_info:
-        raise InvalidRegistrationResponse("Attestation statement was missing certInfo (TPM)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing certInfo (TPM)"
+        )
 
     if not attestation_statement.pub_area:
-        raise InvalidRegistrationResponse("Attestation statement was missing pubArea (TPM)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing pubArea (TPM)"
+        )
 
     if not attestation_statement.alg:
         raise InvalidRegistrationResponse("Attestation statement was missing alg (TPM)")
@@ -71,11 +79,14 @@ def verify_tpm(
             f'Attestation statement ver "{att_stmt_ver}" was not "2.0" (TPM)'
         )
 
-    # Validate the certificate chain
+    # Validate the certificate chain, including TPM AIK certificate requirements (basic
+    # constraints, key usage, EKU with the TCG AIK OID, SAN TPM entries, AAGUID binding)
     try:
         validate_certificate_chain(
             x5c=attestation_statement.x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
+            attestation_type=AttestationCertificateType.TPM,
+            aaguid=aaguid,
         )
     except InvalidCertificateChain as err:
         raise InvalidRegistrationResponse(f"{err} (TPM)")
@@ -124,9 +135,16 @@ def verify_tpm(
                 f'Unique "{unique_hex}" was not same as public key [x,y] "{pub_key_xy_hex}" (TPM)'
             )
 
-        pub_area_crv = TPM_ECC_CURVE_COSE_CRV_MAP[pub_area.parameters.curve_id]
+        try:
+            pub_area_crv = TPM_ECC_CURVE_COSE_CRV_MAP[pub_area.parameters.curve_id]
+        except KeyError:
+            raise InvalidCertificateCurve(
+                f'PubArea curve ID "{pub_area.parameters.curve_id}" did not identify a '
+                "supported WebAuthn EC curve (TPM)"
+            )
+
         if pub_area_crv != decoded_public_key.crv:
-            raise InvalidRegistrationResponse(
+            raise InvalidCertificateCurve(
                 f'PubArea curve ID "{pub_area_crv}" was not same as public key crv "{decoded_public_key.crv}" (TPM)'
             )
     else:
@@ -188,7 +206,7 @@ def verify_tpm(
     # Verify the sig is a valid signature over certInfo using the attestation
     # public key in aikCert with the algorithm specified in alg.
     attestation_cert_bytes = attestation_statement.x5c[0]
-    attestation_cert = x509.load_der_x509_certificate(attestation_cert_bytes)
+    attestation_cert = load_x509_certificate(attestation_cert_bytes).cert
     attestation_cert_pub_key = attestation_cert.public_key()
 
     try:
@@ -199,7 +217,9 @@ def verify_tpm(
             data=attestation_statement.cert_info,
         )
     except InvalidSignature:
-        raise InvalidRegistrationResponse("Could not verify attestation statement signature (TPM)")
+        raise InvalidRegistrationResponse(
+            "Could not verify attestation statement signature (TPM)"
+        )
 
     # Verify that aikCert meets the requirements in § 8.3.1 TPM Attestation Statement
     # Certificate Requirements.
@@ -217,38 +237,36 @@ def verify_tpm(
             f'Certificate Subject "{attestation_cert.subject}" was not empty (TPM)'
         )
 
-    # Start extensions analysis
-    cert_extensions = attestation_cert.extensions
-
-    # The Subject Alternative Name extension MUST be set as defined in
-    # [TPMv2-EK-Profile] section 3.2.9.
+    # The remaining aikCert requirements (Subject Alternative Name TPM entries, Extended Key
+    # Usage TCG AIK OID, Basic Constraints CA=false, id-fido-gen-ce-aaguid binding) are enforced
+    # centrally by validate_certificate_chain() via attestation_cert_constraints. Only extensions
+    # identified there by an explicit OID are treated as verified security attributes.
+    #
+    # The TPM manufacturer hex ID is additionally cross-checked against the known vendor
+    # registry here, since that lookup is TPM-specific policy rather than chain validation.
     try:
-        # Ignore mypy because we're casting to a known type
-        ext_subject_alt_name: SubjectAlternativeName = cert_extensions.get_extension_for_oid(
-            ExtensionOID.SUBJECT_ALTERNATIVE_NAME
-        ).value  # type: ignore[assignment]
+        ext_subject_alt_name: SubjectAlternativeName = (
+            attestation_cert.extensions.get_extension_for_oid(  # type: ignore[assignment]
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            ).value
+        )
     except ExtensionNotFound:
+        # Already raised as InvalidCertificateExtension during chain validation; defensive guard
         raise InvalidRegistrationResponse(
             f"Certificate missing extension {ExtensionOID.SUBJECT_ALTERNATIVE_NAME} (TPM)"
         )
 
-    # `type(tcg_at_tpm_values)` return "<class 'cryptography.x509.name.Name'>" so ignore mypy
-    tcg_at_tpm_values: Name = ext_subject_alt_name.get_values_for_type(GeneralName)[0]  # type: ignore[arg-type, assignment]
+    tcg_at_tpm_values: GeneralName = ext_subject_alt_name.get_values_for_type(GeneralName)[0]  # type: ignore[arg-type, assignment]
     tcg_at_tpm_manufacturer = None
-    tcg_at_tpm_model = None
-    tcg_at_tpm_version = None
-    for obj in tcg_at_tpm_values:
-        oid = obj.oid.dotted_string
-        if oid == "2.23.133.2.1":
+    for obj in tcg_at_tpm_values:  # type: ignore[attr-defined]
+        if obj.oid.dotted_string == TCG_AT_TPM_MANUFACTURER_OID:
             tcg_at_tpm_manufacturer = str(obj.value)
-        elif oid == "2.23.133.2.2":
-            tcg_at_tpm_model = obj.value
-        elif oid == "2.23.133.2.3":
-            tcg_at_tpm_version = obj.value
+            break
 
-    if not tcg_at_tpm_manufacturer or not tcg_at_tpm_model or not tcg_at_tpm_version:
+    if not tcg_at_tpm_manufacturer:
         raise InvalidRegistrationResponse(
-            f"Certificate Subject Alt Name was invalid value {tcg_at_tpm_values} (TPM)",
+            f"Certificate Subject Alt Name was missing TPM manufacturer entry (TPM): "
+            f"{tcg_at_tpm_values}"
         )
 
     try:
@@ -258,50 +276,5 @@ def verify_tpm(
         raise InvalidRegistrationResponse(
             f'Unrecognized TPM Manufacturer "{tcg_at_tpm_manufacturer}" (TPM)'
         )
-
-    # The Extended Key Usage extension MUST contain the OID 2.23.133.8.3
-    # ("joint-iso-itu-t(2) internationalorganizations(23) 133 tcg-kp(8)
-    # tcg-kp-AIKCertificate(3)").
-    try:
-        # Ignore mypy because we're casting to a known type
-        ext_extended_key_usage: ExtendedKeyUsage = cert_extensions.get_extension_for_oid(
-            ExtensionOID.EXTENDED_KEY_USAGE
-        ).value  # type: ignore[assignment]
-    except ExtensionNotFound:
-        raise InvalidRegistrationResponse(
-            f"Certificate missing extension {ExtensionOID.EXTENDED_KEY_USAGE} (TPM)"
-        )
-
-    ext_key_usage_oid = ext_extended_key_usage[0].dotted_string
-
-    if ext_key_usage_oid != "2.23.133.8.3":
-        raise InvalidRegistrationResponse(
-            f'Certificate Extended Key Usage OID "{ext_key_usage_oid}" was not "2.23.133.8.3" (TPM)'
-        )
-
-    try:
-        # Ignore mypy because we're casting to a known type
-        ext_basic_constraints: BasicConstraints = cert_extensions.get_extension_for_oid(
-            ExtensionOID.BASIC_CONSTRAINTS
-        ).value  # type: ignore[assignment]
-    except ExtensionNotFound:
-        raise InvalidRegistrationResponse(
-            f"Certificate missing extension {ExtensionOID.BASIC_CONSTRAINTS} (TPM)"
-        )
-
-    # The Basic Constraints extension MUST have the CA component set to false.
-    if ext_basic_constraints.ca is not False:
-        raise InvalidRegistrationResponse("Certificate Basic Constraints CA was not False (TPM)")
-
-    # If aikCert contains an extension with OID 1.3.6.1.4.1.45724.1.1.4
-    # (id-fido-gen-ce-aaguid) verify that the value of this extension matches the
-    # aaguid in authenticatorData.
-    # TODO: Implement this later if we can find a TPM that returns something here
-    # try:
-    #     fido_gen_ce_aaguid = cert_extensions.get_extension_for_oid(
-    #         ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4")
-    #     )
-    # except ExtensionNotFound:
-    #     pass
 
     return True

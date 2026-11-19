@@ -1,7 +1,6 @@
 import hashlib
 from typing import List
 
-from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 
 from webauthn.helpers import (
@@ -11,6 +10,8 @@ from webauthn.helpers import (
     validate_certificate_chain,
     verify_signature,
 )
+from webauthn.helpers.attestation_cert_constraints import AttestationCertificateType
+from webauthn.helpers.certificate_parsing import load_x509_certificate
 from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
     InvalidRegistrationResponse,
@@ -25,16 +26,21 @@ def verify_packed(
     client_data_json: bytes,
     credential_public_key: bytes,
     pem_root_certs_bytes: List[bytes],
+    aaguid: bytes,
 ) -> bool:
     """Verify a "packed" attestation statement
 
     See https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation
     """
     if not attestation_statement.sig:
-        raise InvalidRegistrationResponse("Attestation statement was missing signature (Packed)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing signature (Packed)"
+        )
 
     if not attestation_statement.alg:
-        raise InvalidRegistrationResponse("Attestation statement was missing algorithm (Packed)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing algorithm (Packed)"
+        )
 
     # Extract attStmt bytes from attestation_object
     attestation_dict = parse_cbor(attestation_object)
@@ -53,17 +59,20 @@ def verify_packed(
     )
 
     if attestation_statement.x5c:
-        # Validate the certificate chain
+        # Validate the certificate chain, including packed attestation certificate requirements
+        # (basic constraints, key usage, AAGUID extension binding)
         try:
             validate_certificate_chain(
                 x5c=attestation_statement.x5c,
                 pem_root_certs_bytes=pem_root_certs_bytes,
+                attestation_type=AttestationCertificateType.PACKED,
+                aaguid=aaguid,
             )
         except InvalidCertificateChain as err:
             raise InvalidRegistrationResponse(f"{err} (Packed)")
 
         attestation_cert_bytes = attestation_statement.x5c[0]
-        attestation_cert = x509.load_der_x509_certificate(attestation_cert_bytes)
+        attestation_cert = load_x509_certificate(attestation_cert_bytes).cert
         attestation_cert_pub_key = attestation_cert.public_key()
 
         try:

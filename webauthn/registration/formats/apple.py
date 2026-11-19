@@ -1,7 +1,6 @@
 import hashlib
 from typing import List
 
-from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.x509 import (
     Extension,
@@ -16,6 +15,7 @@ from webauthn.helpers import (
     parse_cbor,
     validate_certificate_chain,
 )
+from webauthn.helpers.certificate_parsing import load_x509_certificate
 from webauthn.helpers.exceptions import (
     InvalidCertificateChain,
     InvalidRegistrationResponse,
@@ -37,7 +37,9 @@ def verify_apple(
     """
 
     if not attestation_statement.x5c:
-        raise InvalidRegistrationResponse("Attestation statement was missing x5c (Apple)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing x5c (Apple)"
+        )
 
     # Validate the certificate chain
     try:
@@ -74,7 +76,7 @@ def verify_apple(
     # Verify that nonce equals the value of the extension with
     # OID 1.2.840.113635.100.8.2 in credCert.
     attestation_cert_bytes = attestation_statement.x5c[0]
-    attestation_cert = x509.load_der_x509_certificate(attestation_cert_bytes)
+    attestation_cert = load_x509_certificate(attestation_cert_bytes).cert
     cert_extensions = attestation_cert.extensions
 
     # Still no documented name for this OID...
@@ -96,7 +98,9 @@ def verify_apple(
     ext_value: bytes = ext_value_wrapper.value[6:]
 
     if ext_value != nonce_bytes:
-        raise InvalidRegistrationResponse("Certificate nonce was not expected value (Apple)")
+        raise InvalidRegistrationResponse(
+            "Certificate nonce was not expected value (Apple)"
+        )
 
     # Verify that the credential public key equals the Subject Public Key of credCert.
     attestation_cert_pub_key = attestation_cert.public_key()

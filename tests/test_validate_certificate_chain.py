@@ -61,34 +61,55 @@ class TestValidateCertificateChain(TestCase):
             )
 
     def test_passes_on_no_root_certs(self):
-        try:
-            validate_certificate_chain(
-                x5c=apple_x5c_certs,
-            )
-        except Exception as err:
-            print(err)
-            self.fail("validate_certificate_chain failed when it should have succeeded")
+        with patch(
+            "webauthn.helpers.validate_certificate_chain._validation_time_override",
+            self.x509store_time,
+        ):
+            try:
+                validate_certificate_chain(
+                    x5c=apple_x5c_certs,
+                )
+            except Exception as err:
+                print(err)
+                self.fail(
+                    "validate_certificate_chain failed when it should have succeeded"
+                )
 
     def test_passes_on_empty_root_certs_array(self):
-        try:
-            validate_certificate_chain(
-                x5c=apple_x5c_certs,
-                pem_root_certs_bytes=[],
-            )
-        except Exception as err:
-            print(err)
-            self.fail("validate_certificate_chain failed when it should have succeeded")
+        with patch(
+            "webauthn.helpers.validate_certificate_chain._validation_time_override",
+            self.x509store_time,
+        ):
+            try:
+                validate_certificate_chain(
+                    x5c=apple_x5c_certs,
+                    pem_root_certs_bytes=[],
+                )
+            except Exception as err:
+                print(err)
+                self.fail(
+                    "validate_certificate_chain failed when it should have succeeded"
+                )
 
-    def test_includes_original_exception_when_raising(self):
+    @patch_validate_certificate_chain_x509store_getter
+    def test_includes_original_exception_when_raising(
+        self, patched_x509store: X509Store
+    ):
         """
         A low-effort attempt at ensuring that the attempt to validate a certificate chain will
         include the original exception raised by the X509 validation library, instead of just its
         message.
         """
-        custom_exception = X509StoreContextError(message="Oops", certificate=X509(), errors=[])
+        patched_x509store.set_time(self.x509store_time)
+        custom_exception = X509StoreContextError(
+            message="Oops",
+            certificate=X509(),
+            errors=[[20, 0, "unable to get local issuer certificate"]],
+        )
 
         with patch(
-            "OpenSSL.crypto.X509StoreContext.verify_certificate", side_effect=custom_exception
+            "OpenSSL.crypto.X509StoreContext.verify_certificate",
+            side_effect=custom_exception,
         ):
             with self.assertRaises(InvalidCertificateChain) as ctx:
                 validate_certificate_chain(

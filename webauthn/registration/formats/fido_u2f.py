@@ -1,7 +1,6 @@
 import hashlib
 from typing import List
 
-from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ec import (
     SECP256R1,
@@ -13,6 +12,8 @@ from webauthn.helpers import (
     validate_certificate_chain,
     verify_signature,
 )
+from webauthn.helpers.attestation_cert_constraints import AttestationCertificateType
+from webauthn.helpers.certificate_parsing import load_x509_certificate
 from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from webauthn.helpers.decode_credential_public_key import (
     DecodedEC2PublicKey,
@@ -40,7 +41,9 @@ def verify_fido_u2f(
     See https://www.w3.org/TR/webauthn-2/#sctn-fido-u2f-attestation
     """
     if not attestation_statement.sig:
-        raise InvalidRegistrationResponse("Attestation statement was missing signature (FIDO-U2F)")
+        raise InvalidRegistrationResponse(
+            "Attestation statement was missing signature (FIDO-U2F)"
+        )
 
     if not attestation_statement.x5c:
         raise InvalidRegistrationResponse(
@@ -52,11 +55,13 @@ def verify_fido_u2f(
             "Attestation statement contained too many certificates (FIDO-U2F)"
         )
 
-    # Validate the certificate chain
+    # Validate the certificate chain, including FIDO-U2F attestation constraints
     try:
         validate_certificate_chain(
             x5c=attestation_statement.x5c,
             pem_root_certs_bytes=pem_root_certs_bytes,
+            attestation_type=AttestationCertificateType.FIDO_U2F,
+            aaguid=aaguid,
         )
     except InvalidCertificateChain as err:
         raise InvalidRegistrationResponse(f"{err} (FIDO-U2F)")
@@ -72,19 +77,25 @@ def verify_fido_u2f(
 
     # Get the public key from the leaf certificate
     leaf_cert_bytes = attestation_statement.x5c[0]
-    leaf_cert = x509.load_der_x509_certificate(leaf_cert_bytes)
+    leaf_cert = load_x509_certificate(leaf_cert_bytes).cert
     leaf_cert_pub_key = leaf_cert.public_key()
 
     # We need the cert's x and y points so make sure they exist
     if not isinstance(leaf_cert_pub_key, EllipticCurvePublicKey):
-        raise InvalidRegistrationResponse("Leaf cert was not an EC2 certificate (FIDO-U2F)")
+        raise InvalidRegistrationResponse(
+            "Leaf cert was not an EC2 certificate (FIDO-U2F)"
+        )
 
     if not isinstance(leaf_cert_pub_key.curve, SECP256R1):
-        raise InvalidRegistrationResponse("Leaf cert did not use P-256 curve (FIDO-U2F)")
+        raise InvalidRegistrationResponse(
+            "Leaf cert did not use P-256 curve (FIDO-U2F)"
+        )
 
     decoded_public_key = decode_credential_public_key(credential_public_key)
     if not isinstance(decoded_public_key, DecodedEC2PublicKey):
-        raise InvalidRegistrationResponse("Credential public key was not EC2 (FIDO-U2F)")
+        raise InvalidRegistrationResponse(
+            "Credential public key was not EC2 (FIDO-U2F)"
+        )
 
     # Convert the public key to "Raw ANSI X9.62 public key format"
     public_key_u2f = b"".join(

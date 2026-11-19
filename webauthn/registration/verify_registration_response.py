@@ -247,6 +247,7 @@ def verify_registration_response(
             client_data_json=client_data_bytes,
             credential_public_key=attested_credential_data.credential_public_key,
             pem_root_certs_bytes=pem_root_certs_bytes,
+            aaguid=attested_credential_data.aaguid,
         )
     elif attestation_object.fmt == AttestationFormat.TPM:
         verified = verify_tpm(
@@ -255,6 +256,7 @@ def verify_registration_response(
             client_data_json=client_data_bytes,
             credential_public_key=attested_credential_data.credential_public_key,
             pem_root_certs_bytes=pem_root_certs_bytes,
+            aaguid=attested_credential_data.aaguid,
         )
     elif attestation_object.fmt == AttestationFormat.APPLE:
         verified = verify_apple(
