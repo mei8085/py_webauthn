@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changes:**
+
+- `decode_credential_public_key()` now enforces strict binding between each COSE algorithm identifier and the only key type, curve, and coordinate/public key byte lengths the specifications allow it to use. Keys with inconsistent `alg`/`kty`/`crv` identifiers, wrong coordinate lengths (e.g. an ES256/P-256 key with non-32-byte coordinates), wrong ML-DSA `pub` lengths, unrecognized identifier values, wrong-typed or missing required parameters, or map fields not defined for their key type are rejected with `InvalidPublicKeyStructure`, while unknown key types continue to raise `UnsupportedPublicKeyType`. The decoded dataclasses carry the confirmed enum-bound `alg` and `crv` values, and signature verification now consumes those confirmed values instead of re-interpreting the raw COSE fields
+
 ## v3.0.1
 
 **Changes:**

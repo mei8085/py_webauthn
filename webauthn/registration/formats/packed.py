@@ -91,7 +91,9 @@ def verify_packed(
         try:
             verify_signature(
                 public_key=public_key,
-                signature_alg=attestation_statement.alg,
+                # Use the alg confirmed during credential public key decoding
+                # rather than re-interpreting the attestation statement's alg
+                signature_alg=decoded_pub_key.alg,
                 signature=attestation_statement.sig,
                 data=verification_data,
             )

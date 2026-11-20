@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.mldsa import (
 )
 
 from .algorithms import get_ec2_curve
-from .cose import COSECRV, COSEAlgorithmIdentifier
+from .cose import COSEAlgorithmIdentifier
 from .decode_credential_public_key import (
     DecodedEC2PublicKey,
     DecodedOKPPublicKey,
@@ -70,12 +70,12 @@ def decoded_public_key_to_cryptography(
         """
         -8 (EdDSA), where crv is 6 (Ed25519).
         https://www.w3.org/TR/webauthn-2/#sctn-public-key-easy
-        """
-        if public_key.alg != COSEAlgorithmIdentifier.EDDSA or public_key.crv != COSECRV.ED25519:
-            raise UnsupportedPublicKey(
-                f"OKP public key with alg {public_key.alg} and crv {public_key.crv} is not supported"
-            )
 
+        ``decode_credential_public_key`` has already confirmed that the only
+        legal OKP combination is present (alg EDDSA + crv ED25519 + 32-byte x),
+        so the confirmed fields can be trusted directly without re-interpreting
+        any raw COSE parameters.
+        """
         okp_pub_key = Ed25519PublicKey.from_public_bytes(public_key.x)
 
         return okp_pub_key
